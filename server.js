@@ -551,18 +551,27 @@ async function loadPlayerState(playerId) {
   };
 }
 
+// ── HEALTH CHECK ─────────────────────────────
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
 // ── CATCH-ALL → serve index.html ─────────────
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // ── START ─────────────────────────────────────
+// Запускаємо сервер ОДРАЗУ — не чекаємо БД (виправлення для Render)
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
 pool.connect()
-  .then(() => {
-    console.log('✅ Database connected');
-    server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  .then(client => {
+    console.log("✅ Database connected");
+    client.release();
   })
   .catch(e => {
-    console.error('❌ Database connection failed:', e.message);
-    process.exit(1);
+    console.error("⚠️ DB warning:", e.message);
   });
