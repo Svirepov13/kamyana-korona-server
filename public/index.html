@@ -899,6 +899,8 @@ function startGame(token,username,id,state){
   initEnemies();
   resizeIso();
   renderAll();
+  // Sync fresh state from server immediately
+  loadState();
   loadChat();
   setInterval(gameTick,250);
   setInterval(conTick,500);
@@ -908,9 +910,9 @@ function startGame(token,username,id,state){
 }
 
 function applyState(s){
-  if(typeof s.food==='number')G.food=s.food;
-  if(typeof s.wood==='number')G.wood=s.wood;
-  if(typeof s.stone==='number')G.stone=s.stone;
+  if(typeof s.food==='number')G.food=parseFloat(s.food)||0;
+  if(typeof s.wood==='number')G.wood=parseFloat(s.wood)||0;
+  if(typeof s.stone==='number')G.stone=parseFloat(s.stone)||0;
   if(s.bld)BK.forEach(function(id){if(s.bld[id]){G.bld[id].l=s.bld[id].l||0;G.bld[id].busy=!!s.bld[id].busy;G.bld[id].fa=s.bld[id].fa||0;}});
   if(s.tech)TK.forEach(function(id){if(s.tech[id]){G.tech[id].done=!!s.tech[id].done;G.tech[id].busy=!!s.tech[id].busy;G.tech[id].fa=s.tech[id].fa||0;}});
   if(s.army){G.army.hunters=s.army.hunters||0;G.army.spearmen=s.army.spearmen||0;G.army.scouts=s.army.scouts||0;}
@@ -977,10 +979,21 @@ function conTick(){
 }
 
 async function autoSave(){
-  try{await fetch(SERVER_URL+'/api/save',{method:'POST',headers:apiH(),body:JSON.stringify({food:G.food,wood:G.wood,stone:G.stone})});}catch(e){}
+  try{
+    await fetch(SERVER_URL+'/api/save',{method:'POST',headers:apiH(),
+      body:JSON.stringify({food:Math.floor(G.food),wood:Math.floor(G.wood),stone:Math.floor(G.stone)})});
+  }catch(e){}
 }
 async function loadState(){
-  try{var r=await fetch(SERVER_URL+'/api/state',{headers:apiH()});if(r.ok){var s=await r.json();applyState(s);renderAll();}}catch(e){}
+  try{
+    var r=await fetch(SERVER_URL+'/api/state',{headers:apiH()});
+    if(r.ok){
+      var s=await r.json();
+      applyState(s);
+      renderAll();
+      updateHUD();
+    }
+  }catch(e){}
 }
 
 // ══════════ NOTIFY ══════════
