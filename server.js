@@ -15,7 +15,8 @@ const io     = new Server(server, { cors: { origin: '*' } });
 // ── DB ────────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: { rejectUnauthorized: false },
+  family: 4,  // примусово IPv4
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'kamyana-korona-secret-2024';
@@ -23,7 +24,20 @@ const PORT       = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve static files - шукаємо в кількох місцях
+const staticPaths = [
+  path.join(__dirname, 'public'),
+  path.join(__dirname, '..', 'public'),
+  path.join(process.cwd(), 'public'),
+];
+for (const sp of staticPaths) {
+  const fs = require('fs');
+  if (fs.existsSync(sp)) {
+    app.use(express.static(sp));
+    console.log('📁 Static files:', sp);
+    break;
+  }
+}
 
 // ── ONLINE PLAYERS (in-memory) ────────────────
 const onlinePlayers = new Map(); // socketId → {playerId, username}
@@ -147,14 +161,22 @@ app.post('/api/save', authMiddleware, async (req, res) => {
 
 // Побудувати будівлю
 app.post('/api/build', authMiddleware, async (req, res) => {
-  const { type, cost } = req.body;
+  const { type, cost, seconds, currentFood, currentWood, currentStone } = req.body;
   const pid = req.player.id;
   try {
-    // Check resources
+    // Sync current resources from client first (client accumulates offline gains)
+    if (typeof currentFood === 'number') {
+      await pool.query(
+        'UPDATE players SET food=$1, wood=$2, stone=$3 WHERE id=$4',
+        [Math.floor(currentFood), Math.floor(currentWood||0), Math.floor(currentStone||0), pid]
+      );
+    }
+
+    // Check resources in DB (now synced)
     const pr = await pool.query('SELECT food, wood, stone FROM players WHERE id=$1', [pid]);
     const p = pr.rows[0];
     if (p.food < (cost.f||0) || p.wood < (cost.w||0) || p.stone < (cost.s||0))
-      return res.status(400).json({ error: 'Недостатньо ресурсів' });
+      return res.status(400).json({ error: 'Недостатньо ресурсів (є: ' + Math.floor(p.food) + '/' + Math.floor(p.wood) + '/' + Math.floor(p.stone) + ')' });
 
     // Deduct resources
     await pool.query(
@@ -163,7 +185,7 @@ app.post('/api/build', authMiddleware, async (req, res) => {
     );
 
     // Set building busy
-    const finishAt = Date.now() + (req.body.seconds * 1000);
+    const finishAt = Date.now() + ((seconds||30) * 1000);
     await pool.query(
       'UPDATE buildings SET busy=true, finish_at=$1 WHERE player_id=$2 AND type=$3',
       [finishAt, pid, type]
@@ -172,7 +194,7 @@ app.post('/api/build', authMiddleware, async (req, res) => {
     res.json({ ok: true, finishAt });
   } catch (e) {
     console.error('Build error:', e.message);
-    res.status(500).json({ error: 'Помилка будівництва' });
+    res.status(500).json({ error: 'Помилка будівництва: ' + e.message });
   }
 });
 
@@ -558,7 +580,19 @@ app.get("/api/health", (req, res) => {
 
 // ── CATCH-ALL → serve index.html ─────────────
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  const fs = require('fs');
+  const tryPaths = [
+    path.join(__dirname, 'public', 'index.html'),
+    path.join(__dirname, '..', 'public', 'index.html'),
+    path.join(process.cwd(), 'public', 'index.html'),
+  ];
+  const htmlPath = tryPaths.find(p => fs.existsSync(p));
+  if (htmlPath) {
+    res.sendFile(htmlPath);
+  } else {
+    console.log('⚠️ index.html not found, tried:', tryPaths);
+    res.send('<h1>Кам'яна Корона</h1><p>Server running! index.html not found at: ' + tryPaths.join(', ') + '</p>');
+  }
 });
 
 // ── START ─────────────────────────────────────
