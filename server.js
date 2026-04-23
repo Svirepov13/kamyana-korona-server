@@ -150,7 +150,7 @@ app.post('/api/save', authMiddleware, async (req, res) => {
   const { food, wood, stone } = req.body;
   try {
     await pool.query(
-      'UPDATE players SET food=$1, wood=$2, stone=$3, last_online=NOW() WHERE id=$4',
+      'UPDATE players SET food=$1, wood=$2, stone=$3, last_online=NOW(), saved_at=NOW() WHERE id=$4',
       [Math.floor(food||0), Math.floor(wood||0), Math.floor(stone||0), req.player.id]
     );
     res.json({ ok: true });
@@ -167,7 +167,7 @@ app.post('/api/build', authMiddleware, async (req, res) => {
     // Sync current resources from client first (client accumulates offline gains)
     if (typeof currentFood === 'number') {
       await pool.query(
-        'UPDATE players SET food=$1, wood=$2, stone=$3 WHERE id=$4',
+        'UPDATE players SET food=$1, wood=$2, stone=$3, saved_at=NOW() WHERE id=$4',
         [Math.floor(currentFood), Math.floor(currentWood||0), Math.floor(currentStone||0), pid]
       );
     }
@@ -532,8 +532,7 @@ async function loadPlayerState(playerId) {
     owned[o.map_q + ',' + o.map_r] = { type: o.cell_type };
   }
 
-  // Offline resource gains
-  const offSec = Math.min((now - new Date(p.last_online).getTime()) / 1000, 43200);
+  // Resource gains — use saved values + offline accumulation since last save
   const farmLvl = bld.farm?.l || 0;
   const lumberLvl = bld.lumber?.l || 0;
   const quarryLvl = bld.quarry?.l || 0;
@@ -547,16 +546,18 @@ async function loadPlayerState(playerId) {
   const sr = Math.round((1 + quarryLvl)     * (mas  ? 1.5 : 1));
   const limit = 300 + storehouseLvl * 200;
 
-  let food  = parseFloat(p.food) + fr * offSec / 60;
-  let wood  = parseFloat(p.wood) + wr * offSec / 60;
-  let stone = parseFloat(p.stone)+ sr * offSec / 60;
-  food  = Math.min(limit, food);
-  wood  = Math.min(limit, wood);
-  stone = Math.min(limit, stone);
+  // offSec = time since last resource save (capped at 8 hours)
+  const savedAt = p.saved_at ? new Date(p.saved_at).getTime() : now - 60000;
+  const offSec  = Math.min((now - savedAt) / 1000, 28800);
 
-  if (offSec > 5) {
+  let food  = Math.min(limit, parseFloat(p.food)  + fr * offSec / 60);
+  let wood  = Math.min(limit, parseFloat(p.wood)  + wr * offSec / 60);
+  let stone = Math.min(limit, parseFloat(p.stone) + sr * offSec / 60);
+
+  // Save updated resources + set saved_at
+  if (offSec > 2) {
     await pool.query(
-      'UPDATE players SET food=$1, wood=$2, stone=$3 WHERE id=$4',
+      'UPDATE players SET food=$1, wood=$2, stone=$3, saved_at=NOW() WHERE id=$4',
       [Math.floor(food), Math.floor(wood), Math.floor(stone), playerId]
     );
   }
