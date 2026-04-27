@@ -711,6 +711,32 @@ function toggleTheme(){
   }catch(e){}
 })();
 
+// Авто-відновлення сесії якщо є збережений токен
+(function(){
+  try{
+    var savedToken = localStorage.getItem('kk_token');
+    var savedUser  = localStorage.getItem('kk_user');
+    var savedId    = parseInt(localStorage.getItem('kk_id'));
+    if(savedToken && savedUser && savedId){
+      // Verify token is still valid before auto-login
+      fetch(window.location.origin+'/api/state',{
+        headers:{Authorization:'Bearer '+savedToken,'Content-Type':'application/json'}
+      }).then(function(r){
+        if(r.ok){
+          r.json().then(function(state){
+            startGame(savedToken, savedUser, savedId, state);
+          });
+        } else {
+          // Token expired - clear it
+          localStorage.removeItem('kk_token');
+          localStorage.removeItem('kk_user');
+          localStorage.removeItem('kk_id');
+        }
+      }).catch(function(){});
+    }
+  }catch(e){}
+})();
+
 // ══════════════════════════════════════════════
 // 1. TOAST SYSTEM
 // ══════════════════════════════════════════════
@@ -886,11 +912,13 @@ function maybeFloatRes() {
 
 
 
-function logout(){TOKEN='';MY_ID=0;MY_NAME='';if(socket)socket.disconnect();document.getElementById('auth-screen').style.display='flex';document.getElementById('game-screen').style.display='none';}
+function logout(){TOKEN='';MY_ID=0;MY_NAME='';try{localStorage.removeItem('kk_token');localStorage.removeItem('kk_user');localStorage.removeItem('kk_id');}catch(e){}if(socket)socket.disconnect();document.getElementById('auth-screen').style.display='flex';document.getElementById('game-screen').style.display='none';}
 
 // ══════════ START GAME ══════════
 function startGame(token,username,id,state){
   TOKEN=token;MY_ID=id;MY_NAME=username;
+  // Зберігаємо токен щоб не втрачати при оновленні сторінки
+  try{localStorage.setItem('kk_token',token);localStorage.setItem('kk_user',username);localStorage.setItem('kk_id',String(id));}catch(e){}
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('game-screen').style.display='block';
   document.getElementById('player-name').textContent=username;
