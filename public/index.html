@@ -629,6 +629,7 @@ body{background:var(--bg);color:var(--t1);font-family:'Crimson Text',serif;font-
 // CONFIG — ЗМІНИТИ НА СВІЙ URL ПІСЛЯ ДЕПЛОЮ
 // ══════════════════════════════════════════════
 var SERVER_URL = window.location.origin; // автоматично підхоплює
+var GAME_VERSION = 'v0.7'; // ← змінюй при кожному деплої
 
 // ══════════ SVG ICONS ══════════
 var BSVG={townhall:'<svg viewBox="0 0 32 32" fill="none"><rect x="8" y="14" width="16" height="14" fill="#c8a840" stroke="#a07820" stroke-width=".8"/><polygon points="16,4 4,14 28,14" fill="#a03020" stroke="#802010" stroke-width=".8"/><rect x="13" y="20" width="6" height="8" fill="#603010"/><circle cx="16" cy="18" r="2" fill="#4060a0"/></svg>',farm:'<svg viewBox="0 0 32 32" fill="none"><rect x="8" y="16" width="16" height="12" fill="#c06020" stroke="#903010" stroke-width=".8"/><polygon points="16,6 5,16 27,16" fill="#7a3010"/><rect x="14" y="22" width="4" height="6" fill="#3a1808"/></svg>',lumber:'<svg viewBox="0 0 32 32" fill="none"><ellipse cx="10" cy="22" rx="5" ry="3" fill="#906028"/><ellipse cx="16" cy="24" rx="5" ry="3" fill="#a07030"/><ellipse cx="22" cy="22" rx="5" ry="3" fill="#906028"/><rect x="14" y="12" width="4" height="12" fill="#704820"/><polygon points="10,12 16,4 22,12" fill="#2a5010"/></svg>',quarry:'<svg viewBox="0 0 32 32" fill="none"><ellipse cx="12" cy="22" rx="7" ry="5" fill="#909088"/><ellipse cx="20" cy="18" rx="6" ry="5" fill="#b0a898"/><ellipse cx="14" cy="14" rx="5" ry="4" fill="#c8c0b0"/></svg>',barracks:'<svg viewBox="0 0 32 32" fill="none"><rect x="6" y="14" width="20" height="14" fill="#785038" stroke="#503018" stroke-width=".8"/><polygon points="16,5 4,14 28,14" fill="#503018"/><rect x="9" y="18" width="5" height="6" fill="#3050a0"/><rect x="18" y="18" width="5" height="6" fill="#3050a0"/></svg>',storehouse:'<svg viewBox="0 0 32 32" fill="none"><rect x="7" y="16" width="18" height="12" fill="#b08840" stroke="#806020" stroke-width=".8"/><ellipse cx="16" cy="16" rx="9" ry="5" fill="#907030"/><ellipse cx="11" cy="26" rx="3" ry="4" fill="#806028"/><ellipse cx="21" cy="26" rx="3" ry="4" fill="#806028"/></svg>'};
@@ -707,6 +708,32 @@ function toggleTheme(){
   try{
     var t = localStorage.getItem('kk_theme');
     if(t) document.documentElement.setAttribute('data-theme', t);
+  }catch(e){}
+})();
+
+// Авто-відновлення сесії якщо є збережений токен
+(function(){
+  try{
+    var savedToken = localStorage.getItem('kk_token');
+    var savedUser  = localStorage.getItem('kk_user');
+    var savedId    = parseInt(localStorage.getItem('kk_id'));
+    if(savedToken && savedUser && savedId){
+      // Verify token is still valid before auto-login
+      fetch(window.location.origin+'/api/state',{
+        headers:{Authorization:'Bearer '+savedToken,'Content-Type':'application/json'}
+      }).then(function(r){
+        if(r.ok){
+          r.json().then(function(state){
+            startGame(savedToken, savedUser, savedId, state);
+          });
+        } else {
+          // Token expired - clear it
+          localStorage.removeItem('kk_token');
+          localStorage.removeItem('kk_user');
+          localStorage.removeItem('kk_id');
+        }
+      }).catch(function(){});
+    }
   }catch(e){}
 })();
 
@@ -885,14 +912,19 @@ function maybeFloatRes() {
 
 
 
-function logout(){TOKEN='';MY_ID=0;MY_NAME='';if(socket)socket.disconnect();document.getElementById('auth-screen').style.display='flex';document.getElementById('game-screen').style.display='none';}
+function logout(){TOKEN='';MY_ID=0;MY_NAME='';try{localStorage.removeItem('kk_token');localStorage.removeItem('kk_user');localStorage.removeItem('kk_id');}catch(e){}if(socket)socket.disconnect();document.getElementById('auth-screen').style.display='flex';document.getElementById('game-screen').style.display='none';}
 
 // ══════════ START GAME ══════════
 function startGame(token,username,id,state){
   TOKEN=token;MY_ID=id;MY_NAME=username;
+  // Зберігаємо токен щоб не втрачати при оновленні сторінки
+  try{localStorage.setItem('kk_token',token);localStorage.setItem('kk_user',username);localStorage.setItem('kk_id',String(id));}catch(e){}
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('game-screen').style.display='block';
   document.getElementById('player-name').textContent=username;
+  // Show version
+  var vbadge = document.getElementById('version-badge');
+  if(vbadge) vbadge.textContent = GAME_VERSION;
   if(state)applyState(state);
   connectSocket();
   buildMap(id*1337);
@@ -901,10 +933,12 @@ function startGame(token,username,id,state){
   renderAll();
   // Sync fresh state from server immediately
   loadState();
+  // Save immediately so server knows current resources
+  setTimeout(autoSave, 2000);
   loadChat();
   setInterval(gameTick,250);
   setInterval(conTick,500);
-  setInterval(autoSave,30000);
+  setInterval(autoSave,10000); // кожні 10с — частіше щоб сервер знав реальні ресурси
   setInterval(function(){if(socket)socket.emit('ping_alive');},60000);
   requestAnimationFrame(renderLoop);
 }
@@ -1023,12 +1057,56 @@ function renderMyBld(){var list=document.getElementById('myb');if(!list)return;l
 
 function renderBldTab(){var list=document.getElementById('blist');if(!list)return;list.innerHTML='';BK.forEach(function(id){var d=BD[id],b=G.bld[id];if(!b)return;var c=bCost(id),lk=isLock(id),mx=b.l>=d.mx;var now=Date.now(),rem=b.busy&&b.fa?Math.max(0,Math.ceil((b.fa-now)/1000)):0,tot=BD[id].t*(b.l||1),pct=rem>0?Math.min(100,Math.round((1-rem/tot)*100)):0;var el=document.createElement('div');el.className='bc'+(b.busy?' busy':'');var ch='';if(!b.busy&&!mx&&!lk){if(c.f>0)ch+='<span class="ct '+(G.food>=c.f?'cok':'cno')+'">Їжа:'+c.f+'</span>';if(c.w>0)ch+='<span class="ct '+(G.wood>=c.w?'cok':'cno')+'">Дер:'+c.w+'</span>';if(c.s>0)ch+='<span class="ct '+(G.stone>=c.s?'cok':'cno')+'">Кам:'+c.s+'</span>';ch+='<span class="ct ctm">'+d.t*(b.l+1)+'с</span>';}var act='';if(b.busy)act='<div class="pb"><div class="pf" id="bt-'+id+'" style="width:'+pct+'%"></div></div><div class="pt" id="btt-'+id+'">⏳ '+rem+'с</div>';else if(mx)act='<div class="mx">Максимум</div>';else if(lk)act='<div class="lk">Потрібно: '+BD[d.req].n+' рів.'+d.rl+'</div>';else act=(ch?'<div class="costs">'+ch+'</div>':'')+'<button class="bbtn"'+(afford(c)?'':' disabled')+' onclick="doBld(\''+id+'\')">'+(b.l===0?'ПОБУДУВАТИ':'ПОКРАЩИТИ → Рів.'+(b.l+1))+'</button>';el.innerHTML='<div class="brow"><div class="bico">'+BSVG[id]+'</div><div class="bi"><div class="bn">'+d.n+(b.l>0?'<span class="bl">Рів.'+b.l+'</span>':'')+'</div><div class="bd">'+d.d+'</div>'+(b.l>0?'<div class="be">'+d.eff(b.l)+'</div>':'')+act+'</div></div>';list.appendChild(el);});}
 
-async function doBld(id){var b=G.bld[id];if(!b||b.busy||isLock(id))return;var c=bCost(id);if(!afford(c)){notify('Недостатньо ресурсів!');return;}var sec=BD[id].t*(b.l+1);try{var r=await fetch(SERVER_URL+'/api/build',{method:'POST',headers:apiH(),body:JSON.stringify({type:id,cost:c,seconds:sec})});var data=await r.json();if(!r.ok){notify(data.error||'Помилка');return;}G.food-=c.f||0;G.wood-=c.w||0;G.stone-=c.s||0;b.busy=true;b.fa=data.finishAt;notify(BD[id].n+' будується ('+sec+'с)');renderAll();}catch(e){notify('Помилка підключення');}}
+async function doBld(id){
+  var b=G.bld[id];
+  if(!b||b.busy||isLock(id))return;
+  var c=bCost(id);
+  if(!afford(c)){notify('Недостатньо ресурсів!');return;}
+  var sec=BD[id].t*(b.l+1);
+  try{
+    var r=await fetch(SERVER_URL+'/api/build',{
+      method:'POST',headers:apiH(),
+      body:JSON.stringify({
+        type:id, cost:c, seconds:sec,
+        currentFood:G.food,
+        currentWood:G.wood,
+        currentStone:G.stone
+      })
+    });
+    var data=await r.json();
+    if(!r.ok){notify(data.error||'Помилка');return;}
+    G.food-=c.f||0;G.wood-=c.w||0;G.stone-=c.s||0;
+    b.busy=true;b.fa=data.finishAt;
+    notify(BD[id].n+' будується ('+sec+'с)');
+    showToast(BD[id].n,'Будується '+sec+'с','info','🏗');
+    renderAll();
+  }catch(e){notify('Помилка підключення: '+e.message);}
+}
 function doUpg(id,e){if(e)e.stopPropagation();doBld(id);}
 
 function renderTech(){var list=document.getElementById('tlist');if(!list)return;list.innerHTML='';TK.forEach(function(id){var d=TD[id],t=G.tech[id];if(!t)return;var ok=techOk(id),lk=!ok;var cls=t.done?'tdn':(t.busy?'trsch':(lk?'tlk':''));var badge=t.done?'ГОТОВО':(t.busy?'ПРОЦЕС':(lk?'ЗАКРИТО':'ВИВЧИТИ'));var bcls=t.done?'bgdn':(t.busy?'bgpr':(lk?'bglk':'bgav'));var el=document.createElement('div');el.className='tc '+cls;if(!t.done&&!t.busy&&!lk)(function(tid){el.onclick=function(){doRes(tid);};})(id);var ch='';if(!t.done&&!t.busy&&!lk){if(d.c.f>0)ch+='<span class="ct '+(G.food>=d.c.f?'cok':'cno')+'">Їжа:'+d.c.f+'</span>';if(d.c.w>0)ch+='<span class="ct '+(G.wood>=d.c.w?'cok':'cno')+'">Дер:'+d.c.w+'</span>';if(d.c.s>0)ch+='<span class="ct '+(G.stone>=d.c.s?'cok':'cno')+'">Кам:'+d.c.s+'</span>';ch+='<span class="ct ctm">'+d.t+'с</span>';}var now=Date.now(),rem=t.busy&&t.fa?Math.max(0,Math.ceil((t.fa-now)/1000)):0,pct=rem>0?Math.min(100,Math.round((1-rem/d.t)*100)):0;var timer=t.busy?'<div class="pb"><div class="pf" id="tt-'+id+'" style="width:'+pct+'%;background:linear-gradient(90deg,#2860b0,#4890e0)"></div></div><div class="pt" id="ttt-'+id+'" style="color:var(--blue)">⏳ '+rem+'с</div>':'';el.innerHTML='<div class="tth">'+TSVG[id]+'<span class="tn">'+d.n+'</span><span class="tbg '+bcls+'">'+badge+'</span></div><div class="tdc">'+d.d+'</div>'+(ch?'<div class="costs">'+ch+'</div>':'')+timer+(lk&&d.req?'<div class="lk">Потрібно: '+BD[d.req].n+'</div>':'');list.appendChild(el);});}
 
-async function doRes(id){var d=TD[id],t=G.tech[id];if(!t||t.done||t.busy)return;if(!techOk(id)){notify('Спочатку: '+BD[d.req].n);return;}var c={f:d.c.f||0,w:d.c.w||0,s:d.c.s||0};if(!afford(c)){notify('Недостатньо ресурсів!');return;}try{var r=await fetch(SERVER_URL+'/api/research',{method:'POST',headers:apiH(),body:JSON.stringify({type:id,cost:c,seconds:d.t})});var data=await r.json();if(!r.ok){notify(data.error);return;}G.food-=c.f||0;G.wood-=c.w||0;G.stone-=c.s||0;t.busy=true;t.fa=data.finishAt;notify(d.n+' досліджується');renderTech();updateHUD();}catch(e){notify('Помилка');}}
+async function doRes(id){
+  var d=TD[id],t=G.tech[id];
+  if(!t||t.done||t.busy)return;
+  if(!techOk(id)){notify('Спочатку: '+BD[d.req].n);return;}
+  var c={f:d.c.f||0,w:d.c.w||0,s:d.c.s||0};
+  if(!afford(c)){notify('Недостатньо ресурсів!');return;}
+  // Sync resources first
+  try{await fetch(SERVER_URL+'/api/save',{method:'POST',headers:apiH(),body:JSON.stringify({food:G.food,wood:G.wood,stone:G.stone})});}catch(e){}
+  try{
+    var r=await fetch(SERVER_URL+'/api/research',{
+      method:'POST',headers:apiH(),
+      body:JSON.stringify({type:id,cost:c,seconds:d.t})
+    });
+    var data=await r.json();
+    if(!r.ok){notify(data.error||'Помилка');return;}
+    G.food-=c.f||0;G.wood-=c.w||0;G.stone-=c.s||0;
+    t.busy=true;t.fa=data.finishAt;
+    notify(d.n+' досліджується');
+    renderTech();updateHUD();
+  }catch(e){notify('Помилка');}
+}
 
 function renderArmy(){var hb=bl('barracks')>0,hw=td('warfare');var pw=G.army.hunters*5+G.army.spearmen*8+G.army.scouts*2;var list=document.getElementById('alist');if(!list)return;list.innerHTML=(!hb?'<div style="text-align:center;padding:18px;font-style:italic;color:var(--t4);font-size:10px">Побудуйте Казарму</div>':'')+ur('hunters','Мисливець',5,3,hb,'doTr("hunters",15,5,0)','Їжа:15 Дер:5')+ur('spearmen','Списоносець',8,6,hb&&hw,'doTr("spearmen",20,10,5)',hw?'Їжа:20 Дер:10 Кам:5':'Потрібно: Бойове мист.')+ur('scouts','Розвідник',2,2,hb,'doTr("scouts",10,0,0)','Їжа:10')+'<div class="pwb"><div class="pwl">БОЙОВА СИЛА</div><div class="pwv">'+pw+'<span style="font-size:9px;color:var(--t3);margin-left:3px">очок</span></div></div>';}
 function ur(k,n,atk,def,en,fn,lbl){return '<div class="uc"><div class="uico">'+USVG[k]+'</div><div class="ui"><div class="un">'+n+'</div><div class="ust"><span class="uatk">Атк:'+atk+'</span><span class="udef">Зах:'+def+'</span></div><button class="trb"'+(en?'':' disabled')+' onclick="'+fn+'">'+(en?'+ Навчити ('+lbl+')':lbl)+'</button></div><div class="ucnt">'+G.army[k]+'</div></div>';}
